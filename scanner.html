@@ -16,6 +16,7 @@
   #msg.err { color:var(--err); } #msg.ok { color:var(--ok); }
   .row { display:flex; gap:8px; margin-top:12px; }
   .row > * { flex:1; }
+  select { padding:12px; font-size:15px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); min-width:0; }
   input[type=text] { padding:12px; font-size:16px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); min-width:0; }
   button { padding:12px 14px; font-size:15px; border:0; border-radius:8px; background:var(--brand); color:#05203f; cursor:pointer; }
   button.sec { background:transparent; color:var(--brand); border:1px solid var(--brand); }
@@ -35,8 +36,10 @@
 
   <div class="row tools">
     <button id="btnTorch" class="sec hidden" type="button">🔦 Senter</button>
-    <button id="btnFlip" class="sec hidden" type="button">🔄 Ganti kamera</button>
     <input id="zoom" type="range" class="hidden" aria-label="Zoom">
+  </div>
+  <div class="row">
+    <select id="camSel" class="hidden" aria-label="Pilih kamera"></select>
   </div>
 
   <div class="row">
@@ -136,55 +139,86 @@
     if (caps.zoom && caps.zoom.max > caps.zoom.min) {
       const z = $('zoom');
       z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
-      z.value = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.5));
+      z.value = caps.zoom.min;   // jangan zoom otomatis (bisa membuat gambar hitam di sebagian HP)
       z.classList.remove('hidden');
-      const apply = () => t.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {});
-      z.oninput = apply; apply();
+      z.oninput = () => t.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {});
     }
   }
 
-  async function start() {
-    if (!window.Html5Qrcode) { setMsg('Library pemindai gagal dimuat (cek koneksi internet), muat ulang halaman. Atau ketik kode manual.', 'err'); return; }
-    if (!window.isSecureContext) { setMsg('Halaman harus dibuka lewat HTTPS agar kamera bisa dipakai.', 'err'); return; }
+  // ---------- kamera: daftar, pilih, mulai ----------
+  let cams = [], token = 0, attempts = 0;
+  const RE_REAR = /back|rear|environment|belakang|world/i;
+  const RE_FRONT = /front|user|depan|selfie/i;
+  const camScore = c => { const l = c.label || ''; let n = 0;
+    if (RE_REAR.test(l)) n += 10; if (RE_FRONT.test(l)) n -= 10; if (/ultra|tele|macro|depth/i.test(l)) n -= 3; return n; };
+
+  async function stopCam() {
+    try { if (sc) { if (sc.isScanning) await sc.stop(); sc.clear(); } } catch (e) {}
+    sc = null;
+    $('btnTorch').classList.add('hidden'); $('zoom').classList.add('hidden');
+  }
+  function showError(err) {
+    const n = String((err && (err.name || err.message)) || err);
+    if (/NotAllowed|Permission/i.test(n)) setMsg('Izin kamera ditolak. Ketuk ikon gembok di kiri alamat URL → Izin/Kamera → Izinkan, lalu muat ulang. Atau ketik kode manual.', 'err');
+    else if (/NotFound|Devices/i.test(n)) setMsg('Kamera tidak ditemukan di perangkat ini. Ketik kode manual atau pakai foto barcode.', 'err');
+    else if (/NotReadable|TrackStart|in use/i.test(n)) setMsg('Kamera sedang dipakai aplikasi/tab lain. Tutup lalu coba lagi.', 'err');
+    else setMsg('Kamera tidak bisa dibuka: ' + n, 'err');
+  }
+  async function rawStart(id, withVC) {
+    const F = Html5QrcodeSupportedFormats;
+    sc = new Html5Qrcode('reader', {
+      formatsToSupport: [F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.QR_CODE],
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      verbose: false
+    });
+    const cfg = { fps: 12, qrbox: (w, h) => ({ width: Math.floor(Math.min(w * 0.92, 420)), height: Math.floor(Math.min(h * 0.5, 180)) }) };
+    if (id && withVC) cfg.videoConstraints = { deviceId: { exact: id }, width: { ideal: 1280 }, height: { ideal: 720 } };
+    await sc.start(id || { facingMode: 'environment' }, cfg, accept, () => {});
+  }
+  async function startCam(id) {
+    const my = ++token;
+    await stopCam();
     done = false; lastVal = ''; streak = 0;
     setMsg('Memulai kamera…');
     try {
-      const F = Html5QrcodeSupportedFormats;
-      sc = new Html5Qrcode('reader', {
-        formatsToSupport: [F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.QR_CODE],
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-        verbose: false
-      });
-      await sc.start(
-        { facingMode: facing },
-        {
-          fps: 15,
-          qrbox: (w, h) => ({ width: Math.floor(Math.min(w * 0.92, 420)), height: Math.floor(Math.min(h * 0.5, 180)) }),
-          videoConstraints: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } }
-        },
-        accept, () => {}
-      );
-      setMsg('Tahan barcode sejajar di dalam kotak.');
-      setupTools();
-      try {
-        const cams = await Html5Qrcode.getCameras();
-        if (cams && cams.length > 1) $('btnFlip').classList.remove('hidden');
-      } catch (e) {}
-    } catch (err) {
-      const n = String((err && (err.name || err.message)) || err);
-      if (/NotAllowed|Permission/i.test(n)) setMsg('Izin kamera ditolak. Klik ikon gembok di kiri alamat URL → Kamera → Izinkan, lalu muat ulang. Atau ketik kode manual.', 'err');
-      else if (/NotFound|Devices/i.test(n)) setMsg('Kamera tidak ditemukan di perangkat ini. Ketik kode manual atau pakai foto barcode.', 'err');
-      else if (/NotReadable|TrackStart|in use/i.test(n)) setMsg('Kamera sedang dipakai aplikasi/tab lain. Tutup lalu coba lagi.', 'err');
-      else setMsg('Kamera tidak bisa dibuka: ' + n, 'err');
-    }
+      try { await rawStart(id, true); }
+      catch (e1) { if (!/NotAllowed|Permission/i.test(String(e1 && (e1.name || e1)))) { await stopCam(); await rawStart(id, false); } else throw e1; }
+    } catch (err) { if (my === token) showError(err); return; }
+    if (my !== token) return;
+    if (id) { try { localStorage.setItem('invent-cam', id); } catch (e) {} $('camSel').value = id; }
+    setMsg('Tahan barcode sejajar di dalam kotak.');
+    setupTools();
+    // pengaman: bila 3 detik tidak ada gambar, coba kamera berikutnya
+    setTimeout(() => {
+      if (my !== token || done) return;
+      const v = document.querySelector('#reader video');
+      if (v && v.videoWidth > 0 && v.readyState >= 2) return;
+      if (cams.length > 1 && attempts < cams.length - 1) {
+        attempts++;
+        const i = cams.findIndex(c => c.id === id);
+        const next = cams[(i + 1) % cams.length];
+        setMsg('Gambar tidak muncul, mencoba kamera lain…', 'err');
+        startCam(next.id);
+      } else setMsg('Gambar kamera tidak muncul. Pilih kamera lain dari daftar di bawah, atau pakai foto barcode.', 'err');
+    }, 3000);
   }
-
-  $('btnFlip').onclick = async () => {
-    facing = facing === 'environment' ? 'user' : 'environment';
-    $('btnTorch').classList.add('hidden'); $('zoom').classList.add('hidden');
-    try { if (sc) { await sc.stop(); sc.clear(); } } catch (e) {}
-    start();
-  };
+  async function start() {
+    if (!window.Html5Qrcode) { setMsg('Library pemindai gagal dimuat (cek koneksi internet), muat ulang halaman. Atau ketik kode manual.', 'err'); return; }
+    if (!window.isSecureContext) { setMsg('Halaman harus dibuka lewat HTTPS agar kamera bisa dipakai.', 'err'); return; }
+    setMsg('Meminta izin kamera…');
+    try { cams = (await Html5Qrcode.getCameras() || []).slice().sort((a, b) => camScore(b) - camScore(a)); }
+    catch (err) { showError(err); return; }
+    if (cams.length) {
+      $('camSel').innerHTML = cams.map((c, i) => '<option value="' + c.id + '">' + (c.label || ('Kamera ' + (i + 1))).replace(/</g, '') +
+        (RE_REAR.test(c.label || '') ? ' (belakang)' : RE_FRONT.test(c.label || '') ? ' (depan)' : '') + '</option>').join('');
+      $('camSel').classList.remove('hidden');
+    }
+    let saved = ''; try { saved = localStorage.getItem('invent-cam') || ''; } catch (e) {}
+    attempts = 0;
+    const pick = cams.find(c => c.id === saved) || cams[0];
+    startCam(pick ? pick.id : null);
+  }
+  $('camSel').onchange = () => { attempts = 99; startCam($('camSel').value); };
 
   // manual
   const submitManual = () => {
