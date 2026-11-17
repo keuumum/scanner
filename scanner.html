@@ -11,6 +11,7 @@
   body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
   .wrap { max-width:560px; margin:0 auto; padding:14px; }
   h1 { font-size:18px; margin:4px 0 10px; }
+  #readerWrap { overflow:hidden; border-radius:12px; touch-action:none; background:#000; }
   #reader { width:100%; min-height:260px; background:#000; border-radius:12px; overflow:hidden; }
   #msg { font-size:14px; margin-top:10px; min-height:20px; word-break:break-word; color:var(--muted); }
   #msg.err { color:var(--err); } #msg.ok { color:var(--ok); }
@@ -31,7 +32,7 @@
 <body>
 <div class="wrap">
   <h1>📷 Arahkan kamera ke barcode</h1>
-  <div id="reader"></div>
+  <div id="readerWrap"><div id="reader"></div></div>
   <div id="msg">Memulai kamera…</div>
 
   <div class="row tools">
@@ -54,7 +55,7 @@
   <input id="photo" type="file" accept="image/*" capture="environment" class="hidden">
   <div id="fileReader" class="hidden"></div>
 
-  <div class="small">Tips: dekatkan sampai barcode memenuhi lebar kotak, tahan stabil, hindari pantulan cahaya. Nyalakan senter bila gelap.</div>
+  <div class="small">Tips: dekatkan sampai barcode memenuhi lebar kotak. Cubit dua jari di layar kamera untuk zoom. Nyalakan senter bila gelap.</div>
   <div id="noApp" class="small hidden"></div>
   <div id="diag" class="small"></div>
 </div>
@@ -67,7 +68,7 @@
   const DEFAULT_APP_URL = '';
   // Kode harus terbaca sama sebanyak ini berturut-turut sebelum diterima (mengurangi salah baca)
   const CONFIRM_READS = 2;
-  const VERSION = 'v3';
+  const VERSION = 'v4';
   const diag = t => { $('diag').textContent = VERSION + ' · ' + t; };
 
   const CODE_RE = /^[A-Za-z0-9._-]{1,40}$/;
@@ -123,6 +124,40 @@
     goBack(code);
   }
 
+  // ---------- zoom (slider + cubit dua jari + scroll mouse) ----------
+  let zoomInfo = null, zoomBusy = false;
+  function setZoom(v) {
+    if (!zoomInfo) return;
+    v = Math.min(zoomInfo.max, Math.max(zoomInfo.min, v));
+    zoomInfo.cur = v; $('zoom').value = v;
+    if (zoomBusy) return; zoomBusy = true;
+    requestAnimationFrame(() => {
+      zoomBusy = false;
+      try { zoomInfo.track.applyConstraints({ advanced: [{ zoom: zoomInfo.cur }] }).catch(() => {}); } catch (e) {}
+    });
+  }
+  (function () {
+    const wrap = $('readerWrap'); let pinch = null;
+    const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    wrap.addEventListener('touchstart', e => { if (e.touches.length === 2 && zoomInfo) { pinch = { d: dist(e.touches), z: zoomInfo.cur }; e.preventDefault(); } }, { passive: false });
+    wrap.addEventListener('touchmove', e => { if (pinch && e.touches.length === 2) { e.preventDefault(); setZoom(pinch.z * dist(e.touches) / pinch.d); } }, { passive: false });
+    wrap.addEventListener('touchend', e => { if (e.touches.length < 2) pinch = null; });
+    wrap.addEventListener('wheel', e => { if (!zoomInfo) return; e.preventDefault(); setZoom(zoomInfo.cur * (e.deltaY < 0 ? 1.12 : 0.89)); }, { passive: false });
+  })();
+
+  // ---------- perkecil tampilan kamera agar kontrol di bawah terlihat ----------
+  // Memakai transform (bukan mengubah ukuran video) supaya area baca barcode tetap akurat.
+  function fitReader() {
+    const r = $('reader'), w = $('readerWrap');
+    r.style.transform = ''; w.style.height = '';
+    const h = r.offsetHeight; if (!h) return;
+    const maxH = Math.max(200, Math.floor(window.innerHeight * 0.40));
+    const k = Math.min(1, maxH / h);
+    if (k < 1) { r.style.transformOrigin = 'top center'; r.style.transform = 'scale(' + k + ')'; w.style.height = Math.ceil(h * k) + 'px'; }
+  }
+  window.addEventListener('resize', fitReader);
+  window.addEventListener('orientationchange', () => setTimeout(fitReader, 300));
+
   function track() {
     const v = document.querySelector('#reader video');
     const s = v && v.srcObject;
@@ -144,7 +179,8 @@
       z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
       z.value = caps.zoom.min;   // jangan zoom otomatis (bisa membuat gambar hitam di sebagian HP)
       z.classList.remove('hidden');
-      z.oninput = () => t.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {});
+      zoomInfo = { min: caps.zoom.min, max: caps.zoom.max, cur: caps.zoom.min, track: t };
+      z.oninput = () => setZoom(Number(z.value));
     }
   }
 
@@ -157,7 +193,7 @@
 
   async function stopCam() {
     try { if (sc) { if (sc.isScanning) await sc.stop(); sc.clear(); } } catch (e) {}
-    sc = null;
+    sc = null; zoomInfo = null;
     $('btnTorch').classList.add('hidden'); $('zoom').classList.add('hidden');
   }
   function showError(err) {
@@ -192,6 +228,7 @@
     if (id) { try { localStorage.setItem('invent-cam', id); } catch (e) {} $('camSel').value = id; }
     setMsg('Tahan barcode sejajar di dalam kotak.');
     setupTools();
+    [200, 800, 2000].forEach(ms => setTimeout(() => { if (my === token) fitReader(); }, ms));
     setTimeout(() => {
       const v = document.querySelector('#reader video'); const t = track();
       diag('kamera ' + (t && t.label ? t.label : '?') + ' · ' + (v ? v.videoWidth + 'x' + v.videoHeight : 'tanpa video') + ' · total ' + cams.length + ' kamera');
