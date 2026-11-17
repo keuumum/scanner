@@ -56,17 +56,20 @@
 
   <div class="small">Tips: dekatkan sampai barcode memenuhi lebar kotak, tahan stabil, hindari pantulan cahaya. Nyalakan senter bila gelap.</div>
   <div id="noApp" class="small hidden"></div>
+  <div id="diag" class="small"></div>
 </div>
 
 <script>
+  const $ = id => document.getElementById(id);
   // ================= KONFIGURASI =================
   // Biasanya TIDAK perlu diisi: aplikasi mengirim alamatnya sendiri lewat ?app=...
   // Isi hanya bila ingin alamat tetap, mis. 'https://script.google.com/macros/s/AKfy.../exec'
   const DEFAULT_APP_URL = '';
   // Kode harus terbaca sama sebanyak ini berturut-turut sebelum diterima (mengurangi salah baca)
   const CONFIRM_READS = 2;
+  const VERSION = 'v3';
+  const diag = t => { $('diag').textContent = VERSION + ' · ' + t; };
 
-  const $ = id => document.getElementById(id);
   const CODE_RE = /^[A-Za-z0-9._-]{1,40}$/;
   const APP_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[^\/]+\/|macros\/)s\/[A-Za-z0-9_-]+\/(exec|dev)$/;
 
@@ -159,6 +162,7 @@
   }
   function showError(err) {
     const n = String((err && (err.name || err.message)) || err);
+    diag('error: ' + n);
     if (/NotAllowed|Permission/i.test(n)) setMsg('Izin kamera ditolak. Ketuk ikon gembok di kiri alamat URL → Izin/Kamera → Izinkan, lalu muat ulang. Atau ketik kode manual.', 'err');
     else if (/NotFound|Devices/i.test(n)) setMsg('Kamera tidak ditemukan di perangkat ini. Ketik kode manual atau pakai foto barcode.', 'err');
     else if (/NotReadable|TrackStart|in use/i.test(n)) setMsg('Kamera sedang dipakai aplikasi/tab lain. Tutup lalu coba lagi.', 'err');
@@ -188,6 +192,10 @@
     if (id) { try { localStorage.setItem('invent-cam', id); } catch (e) {} $('camSel').value = id; }
     setMsg('Tahan barcode sejajar di dalam kotak.');
     setupTools();
+    setTimeout(() => {
+      const v = document.querySelector('#reader video'); const t = track();
+      diag('kamera ' + (t && t.label ? t.label : '?') + ' · ' + (v ? v.videoWidth + 'x' + v.videoHeight : 'tanpa video') + ' · total ' + cams.length + ' kamera');
+    }, 1500);
     // pengaman: bila 3 detik tidak ada gambar, coba kamera berikutnya
     setTimeout(() => {
       if (my !== token || done) return;
@@ -208,6 +216,7 @@
     setMsg('Meminta izin kamera…');
     try { cams = (await Html5Qrcode.getCameras() || []).slice().sort((a, b) => camScore(b) - camScore(a)); }
     catch (err) { showError(err); return; }
+    diag(cams.length + ' kamera: ' + cams.map(c => c.label || '(tanpa nama)').join(' | '));
     if (cams.length) {
       $('camSel').innerHTML = cams.map((c, i) => '<option value="' + c.id + '">' + (c.label || ('Kamera ' + (i + 1))).replace(/</g, '') +
         (RE_REAR.test(c.label || '') ? ' (belakang)' : RE_FRONT.test(c.label || '') ? ' (depan)' : '') + '</option>').join('');
