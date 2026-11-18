@@ -68,7 +68,7 @@
   const DEFAULT_APP_URL = '';
   // Kode harus terbaca sama sebanyak ini berturut-turut sebelum diterima (mengurangi salah baca)
   const CONFIRM_READS = 2;
-  const VERSION = 'v4';
+  const VERSION = 'v5';
   const diag = t => { $('diag').textContent = VERSION + ' · ' + t; };
 
   const CODE_RE = /^[A-Za-z0-9._-]{1,40}$/;
@@ -100,12 +100,28 @@
     }
   })();
 
+  // ---------- GPS: dipantau sejak halaman dibuka, dikirim ke aplikasi bersama kode ----------
+  let bestFix = null;
+  try {
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(pos => {
+        const c = pos.coords;
+        if (!bestFix || c.accuracy <= bestFix.acc || Date.now() - bestFix.t > 20000)
+          bestFix = { lat: c.latitude, lng: c.longitude, acc: Math.round(c.accuracy), t: Date.now() };
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 30000 });
+    }
+  } catch (e) {}
+  function geoParam() {
+    if (!bestFix || Date.now() - bestFix.t > 120000) return '';
+    return '&geo=' + bestFix.lat.toFixed(7) + ',' + bestFix.lng.toFixed(7) + ',' + bestFix.acc;
+  }
+
   function goBack(code) {
     if (!APP_URL) {
       setMsg(code ? 'Terbaca: ' + code + '. Alamat aplikasi belum diketahui, salin kode ini dan tempel di aplikasi.' : 'Alamat aplikasi belum diketahui.', code ? 'ok' : 'err');
       return;
     }
-    location.replace(APP_URL + (code ? '?code=' + encodeURIComponent(code) : ''));
+    location.replace(APP_URL + (code ? '?code=' + encodeURIComponent(code) + geoParam() : ''));
   }
 
   // ================= PEMINDAI =================
